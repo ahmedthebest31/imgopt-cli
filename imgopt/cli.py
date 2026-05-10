@@ -15,7 +15,7 @@ from watchdog.observers import Observer
 from watchdog.events import PatternMatchingEventHandler
 
 # --- Project Metadata ---
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __prog_name__ = "imgopt"
 
 # --- Configuration ---
@@ -33,6 +33,7 @@ class ImageTask(NamedTuple):
     input_root: Path
     quality: int
     max_width: Optional[int]
+    dry_run: bool
 
 
 def signal_handler(_sig: Any, _frame: Any) -> None:
@@ -152,8 +153,17 @@ def process_single_image(task: ImageTask) -> Tuple[bool, str, int, int]:
         ):
             return (True, f"{task.file_path.name} (Skipped: Already up to date)", 0, 0)
 
-        output_file_path.parent.mkdir(parents=True, exist_ok=True)
         original_size = task.file_path.stat().st_size
+
+        if task.dry_run:
+            return (
+                True,
+                f"[DRY RUN] {task.file_path.name} -> Ready for processing",
+                original_size,
+                0,
+            )
+
+        output_file_path.parent.mkdir(parents=True, exist_ok=True)
 
         with Image.open(task.file_path) as img:
             img = ImageOps.exif_transpose(img)
@@ -191,6 +201,7 @@ class ImageWatcher(PatternMatchingEventHandler):
         quality: int,
         max_width: Optional[int],
         verbose: bool,
+        dry_run: bool,
     ):
         patterns = [f"*{ext}" for ext in EXTENSIONS] + [
             f"*{ext.upper()}" for ext in EXTENSIONS
@@ -201,6 +212,7 @@ class ImageWatcher(PatternMatchingEventHandler):
         self.quality = quality
         self.max_width = max_width
         self.verbose = verbose
+        self.dry_run = dry_run
 
     def on_modified(self, event: Any) -> None:
         self.process_event(event.src_path)
@@ -214,7 +226,12 @@ class ImageWatcher(PatternMatchingEventHandler):
             return
 
         task = ImageTask(
-            file_path, self.output_root, self.input_root, self.quality, self.max_width
+            file_path,
+            self.output_root,
+            self.input_root,
+            self.quality,
+            self.max_width,
+            self.dry_run,
         )
         is_ok, msg, _, _ = process_single_image(task)
         if self.verbose:
@@ -239,6 +256,7 @@ def main() -> None:
         "  imgopt                         (Launch Interactive Wizard)\n"
         "  imgopt ./photos -q 90          (Quick mode, override quality to 90)\n"
         "  imgopt ./photos --watch        (Watch mode: auto-process new images instantly)\n"
+        "  imgopt ./photos --dry-run      (Simulate process without modifying files)\n"
         "  imgopt ./photos -w 0           (Convert only, no resize)",
     )
 
@@ -290,6 +308,11 @@ def main() -> None:
         action="store_true",
         help="Watch the directory for new images and process them in the background.",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Simulate the optimization process without saving any files.",
+    )
 
     args = parser.parse_args()
 
@@ -309,6 +332,7 @@ def main() -> None:
     )
     is_interactive = args.interactive
     is_watch_mode = args.watch
+    is_dry_run = args.dry_run
 
     if len(sys.argv) == 1 and not defaults:
         is_interactive = True
@@ -396,15 +420,18 @@ def main() -> None:
         logger.error("Error: Input and Output folders cannot be the same.")
         sys.exit(1)
 
-    output_dir.mkdir(exist_ok=True)
+    if not is_dry_run:
+        output_dir.mkdir(exist_ok=True)
 
     if is_watch_mode:
         logger.info(f"Watching directory: {input_dir}")
         logger.info(f"Target directory: {output_dir.name}")
+        if is_dry_run:
+            logger.info("[DRY RUN MODE ENABLED - No files will be saved]")
         logger.info("Press Ctrl+C to stop.")
 
         event_handler = ImageWatcher(
-            input_dir, output_dir, quality, target_width, verbose
+            input_dir, output_dir, quality, target_width, verbose, is_dry_run
         )
         observer = Observer()
         observer.schedule(event_handler, str(input_dir), recursive=True)
@@ -433,7 +460,10 @@ def main() -> None:
         logger.warning("No images found.")
         sys.exit(0)
 
-    tasks = [ImageTask(f, output_dir, input_dir, quality, target_width) for f in files]
+    tasks = [
+        ImageTask(f, output_dir, input_dir, quality, target_width, is_dry_run)
+        for f in files
+    ]
     success, failed, orig_total, new_total = 0, 0, 0, 0
 
     try:
@@ -454,13 +484,16 @@ def main() -> None:
         logger.error("\nCancelled.")
         sys.exit(1)
 
-    saved = orig_total - new_total
-    saved_mb = saved / (1024 * 1024)
-    pct = (saved / orig_total * 100) if orig_total > 0 else 0
-
     logger.info("\n" + "=" * 40)
-    logger.info(f"Finished: {success} OK | {failed} Failed")
-    logger.info(f"Saved:    {saved_mb:.2f} MB ({pct:.1f}%)")
+    if is_dry_run:
+        logger.info(f"DRY RUN FINISHED: {success} files would be processed.")
+        logger.info("No files were written to disk.")
+    else:
+        saved = orig_total - new_total
+        saved_mb = saved / (1024 * 1024)
+        pct = (saved / orig_total * 100) if orig_total > 0 else 0
+        logger.info(f"Finished: {success} OK | {failed} Failed")
+        logger.info(f"Saved:    {saved_mb:.2f} MB ({pct:.1f}%)")
     logger.info("=" * 40)
 
     if play_sound:

@@ -4,12 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "imgopt-cli"
-version = "1.0.0"
-description = "A high-performance CLI tool to batch optimize images for the web."
+version = "1.1.0"
+description = "A high-performance CLI tool with directory watching to batch optimize images into WebP format."
 readme = "README.md"
 authors = [{name = "Ahmed Samy El-khouly"}]
 license = {file = "LICENSE"}
+keywords = ["image", "optimization", "webp", "cli", "converter", "watchdog", "batch"]
 classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
